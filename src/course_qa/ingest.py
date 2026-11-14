@@ -3,24 +3,31 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import faiss
 import pymupdf
 
-from course_qa.config import RetrievalConfig
+from course_qa.config import CleaningSettings, RetrievalConfig
 from course_qa.models import Embedder
 from course_qa.passages import Passage
 
 PASSAGES_FILE = "passages.json"
 DENSE_INDEX_FILE = "dense.faiss"
 
+# Symbol-font bullets extract as the replacement character or private-use code points.
+_BROKEN_GLYPHS = re.compile("[�-]")
+# A line holding only bullet or arrow symbols carries no content.
+_SYMBOLS_ONLY = re.compile("[\\s•·▪▫◦■□●○►▶➢✓✔*>–—-]*")
+
 
 @dataclass(frozen=True)
 class Slide:
     lecture: str
-    number: int  # 1-based, as students see it
+    number: int  # 1-based page number, as students see it in the PDF
     title: str
     text: str
 
@@ -29,29 +36,102 @@ class Slide:
 class IngestReport:
     slides_read: int
     passages: int
+    duplicates_removed: int = 0
+    footers_removed: dict[str, list[str]] = field(default_factory=dict)
+    near_empty: list[tuple[str, int]] = field(default_factory=list)  # (Lecture, Slide)
 
 
-def read_slides(pdf_path: Path) -> list[Slide]:
+@dataclass(frozen=True)
+class _Page:
+    number: int
+    lines: list[str]  # cleaned of broken glyphs and page numbers; no empty lines
+    margin_lines: set[str]  # lines sitting in the top or bottom margin of the page
+    spans: list[tuple[float, str]]  # (font size, cleaned text), for title detection
+
+    def title(self, footers: set[str]) -> str:
+        """The text set in the largest font, ignoring footers and the page number."""
+        candidates = [
+            (size, text)
+            for size, text in self.spans
+            if text and text not in footers and text != str(self.number)
+        ]
+        return max(candidates, key=lambda c: c[0])[1] if candidates else ""
+
+
+@dataclass(frozen=True)
+class _LectureRead:
+    slides: list[Slide]  # Duplicate Slides already removed
+    pages_read: int
+    duplicates_removed: int
+    footers: list[str]
+
+
+def read_lecture(pdf_path: Path, cleaning: CleaningSettings) -> _LectureRead:
+    """Read one Lecture: clean its Slides, then drop Duplicate Slides within it."""
     lecture = pdf_path.stem
-    slides = []
     with pymupdf.open(pdf_path) as doc:
-        for number, page in enumerate(doc, start=1):
-            slides.append(
-                Slide(lecture, number, _slide_title(page), page.get_text().strip())
-            )
-    return slides
+        pages = [
+            _read_page(number, page, cleaning.footer_margin)
+            for number, page in enumerate(doc, start=1)
+        ]
+
+    footers = _deck_footers(pages, cleaning)
+    slides = [
+        Slide(
+            lecture,
+            p.number,
+            p.title(footers),
+            "\n".join(line for line in p.lines if line not in footers),
+        )
+        for p in pages
+    ]
+    kept = [s for s, nxt in zip(slides, slides[1:] + [None]) if not _is_build_step(s, nxt)]
+    return _LectureRead(kept, len(pages), len(slides) - len(kept), sorted(footers))
 
 
-def _slide_title(page: pymupdf.Page) -> str:
-    """The text set in the largest font on the page."""
-    best_size, best_text = 0.0, ""
+def _is_near_empty(slide: Slide, cleaning: CleaningSettings) -> bool:
+    body = "".join(line for line in slide.text.splitlines() if line != slide.title)
+    return len("".join(body.split())) < cleaning.near_empty_chars
+
+
+def _is_build_step(slide: Slide, next_slide: Slide | None) -> bool:
+    """A Slide is a Duplicate when the next Slide repeats it with more content (a build)."""
+    return (
+        next_slide is not None
+        and bool(slide.title or slide.text)  # image-only Slides differ in what we can't see
+        and slide.title == next_slide.title
+        and set(slide.text.splitlines()) <= set(next_slide.text.splitlines())
+    )
+
+
+def _read_page(number: int, page: pymupdf.Page, margin: float) -> _Page:
+    height = page.rect.height or 1.0
+    lines: list[str] = []
+    margin_lines: set[str] = set()
+    spans: list[tuple[float, str]] = []
     for block in page.get_text("dict")["blocks"]:
         for line in block.get("lines", []):
-            for span in line["spans"]:
-                text = span["text"].strip()
-                if text and span["size"] > best_size:
-                    best_size, best_text = span["size"], text
-    return best_text
+            spans.extend((s["size"], _clean_line(s["text"])) for s in line["spans"])
+            text = _clean_line("".join(s["text"] for s in line["spans"]))
+            if not text or text == str(number):
+                continue
+            lines.append(text)
+            middle = (line["bbox"][1] + line["bbox"][3]) / 2 / height
+            if middle < margin or middle > 1 - margin:
+                margin_lines.add(text)
+    return _Page(number, lines, margin_lines, spans)
+
+
+def _deck_footers(pages: list[_Page], cleaning: CleaningSettings) -> set[str]:
+    """Margin lines repeated on enough of a Lecture's Slides to be footers, not content."""
+    counts = Counter(line for p in pages for line in p.margin_lines)
+    needed = max(cleaning.footer_min_count, cleaning.footer_min_share * len(pages))
+    return {line for line, count in counts.items() if count >= needed}
+
+
+def _clean_line(line: str) -> str:
+    line = _BROKEN_GLYPHS.sub("", line).strip()
+    return "" if _SYMBOLS_ONLY.fullmatch(line) else line
 
 
 def build_passages(slides: list[Slide]) -> list[Passage]:
@@ -69,7 +149,17 @@ def build_passages(slides: list[Slide]) -> list[Passage]:
 def ingest(
     lectures_dir: Path, index_dir: Path, config: RetrievalConfig, embedder: Embedder
 ) -> IngestReport:
-    slides = [s for pdf in sorted(Path(lectures_dir).rglob("*.pdf")) for s in read_slides(pdf)]
+    slides: list[Slide] = []
+    pages_read = duplicates_removed = 0
+    footers_removed: dict[str, list[str]] = {}
+    for pdf in sorted(Path(lectures_dir).rglob("*.pdf")):
+        lecture = read_lecture(pdf, config.cleaning)
+        slides.extend(lecture.slides)
+        pages_read += lecture.pages_read
+        duplicates_removed += lecture.duplicates_removed
+        if lecture.footers:
+            footers_removed[pdf.stem] = lecture.footers
+    near_empty = [(s.lecture, s.number) for s in slides if _is_near_empty(s, config.cleaning)]
     passages = build_passages(slides)
 
     vectors = embedder.embed([p.text for p in passages])
@@ -82,4 +172,10 @@ def ingest(
     (index_dir / PASSAGES_FILE).write_text(
         json.dumps([p.model_dump() for p in passages], ensure_ascii=False), encoding="utf-8"
     )
-    return IngestReport(slides_read=len(slides), passages=len(passages))
+    return IngestReport(
+        slides_read=pages_read,
+        duplicates_removed=duplicates_removed,
+        passages=len(passages),
+        footers_removed=footers_removed,
+        near_empty=near_empty,
+    )

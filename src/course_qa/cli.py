@@ -62,7 +62,14 @@ def main() -> None:
             config,
             SentenceTransformerEmbedder(config.embedding_model),
         )
-        print(f"Slides read: {report.slides_read}  Passages: {report.passages}")
+        print(f"Slides read:              {report.slides_read}")
+        print(f"Duplicate Slides removed: {report.duplicates_removed}")
+        print(f"Passages indexed:         {report.passages}")
+        for lecture, footers in report.footers_removed.items():
+            print(f"Footers removed from {lecture}: {', '.join(footers)}")
+        print(f"Near-empty Slides:        {len(report.near_empty)}")
+        for lecture, slide in report.near_empty:
+            print(f"  {lecture} — Slide {slide}")
     else:
         import uvicorn
 
