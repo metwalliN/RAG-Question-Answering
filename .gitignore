@@ -1,0 +1,12 @@
+# Course Material and built indexes are never committed (copyright, size)
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Secrets
+.env

@@ -1,0 +1,5 @@
+# Pre-registered Baseline (ADR-0001). Do not tune this file.
+name: baseline
+top_k: 5
+embedding_model: BAAI/bge-small-en-v1.5
+# One Slide per Passage, dense-only, no BM25, no reranker.
