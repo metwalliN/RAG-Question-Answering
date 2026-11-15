@@ -9,21 +9,42 @@ import argparse
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from course_qa.config import RetrievalConfig
 
 
 def _settings() -> dict[str, str]:
+    load_dotenv()  # GROQ_API_KEY and COURSE_QA_* from .env, if present
     return {
         "lectures": os.environ.get("COURSE_QA_LECTURES_DIR", "data/raw"),
         "index": os.environ.get("COURSE_QA_INDEX_DIR", "data/index"),
         "config": os.environ.get("COURSE_QA_CONFIG", "eval/configs/baseline.yaml"),
-        "answer_model": os.environ.get("COURSE_QA_ANSWER_MODEL", "claude-haiku-5-5"),
+        "llm_provider": os.environ.get("COURSE_QA_LLM_PROVIDER", "groq"),
+        "answer_model": os.environ.get("COURSE_QA_ANSWER_MODEL", ""),
+        "ollama_url": os.environ.get("COURSE_QA_OLLAMA_URL", "http://localhost:11434"),
     }
+
+
+def _answer_llm(s: dict[str, str]):
+    """Groq's free tier by default; a local Ollama model when offline."""
+    from course_qa.adapters import (
+        DEFAULT_GROQ_MODEL,
+        DEFAULT_OLLAMA_MODEL,
+        GroqAnswerLLM,
+        OllamaAnswerLLM,
+    )
+
+    if s["llm_provider"] == "ollama":
+        return OllamaAnswerLLM(s["answer_model"] or DEFAULT_OLLAMA_MODEL, s["ollama_url"])
+    if s["llm_provider"] == "groq":
+        return GroqAnswerLLM(s["answer_model"] or DEFAULT_GROQ_MODEL)
+    raise SystemExit(f"COURSE_QA_LLM_PROVIDER must be 'groq' or 'ollama', not {s['llm_provider']!r}")
 
 
 def create_service_app():
     """App factory for uvicorn: real models, settings from the environment."""
-    from course_qa.adapters import ClaudeAnswerLLM, SentenceTransformerEmbedder
+    from course_qa.adapters import SentenceTransformerEmbedder
     from course_qa.api import create_app
 
     s = _settings()
@@ -32,7 +53,7 @@ def create_service_app():
         Path(s["index"]),
         config,
         SentenceTransformerEmbedder(config.embedding_model),
-        ClaudeAnswerLLM(s["answer_model"]),
+        _answer_llm(s),
     )
 
 
@@ -55,7 +76,8 @@ def main() -> None:
     ladder_p.add_argument("--unlock-test-split", action="store_true",
                           help="Only for the final reported run")
     ladder_p.add_argument("--answer", action="store_true",
-                          help="Also answer every question with the LLM (API cost) for Refusal metrics")
+                          help="Also answer every question with the LLM for Refusal metrics "
+                               "(slower; subject to Groq free-tier rate limits)")
     ladder_p.add_argument("--out", default="results.md")
 
     serve_p = sub.add_parser("serve", help="Run the HTTP API")
@@ -83,7 +105,7 @@ def main() -> None:
         for lecture, slide in report.near_empty:
             print(f"  {lecture} — Slide {slide}")
     elif args.command == "ladder":
-        from course_qa.adapters import ClaudeAnswerLLM, SentenceTransformerEmbedder
+        from course_qa.adapters import SentenceTransformerEmbedder
         from course_qa.ladder import format_results, run_ladder
 
         embedders: dict[str, SentenceTransformerEmbedder] = {}
@@ -94,7 +116,7 @@ def main() -> None:
             work_dir=Path(args.work_dir),
             embedder_for=lambda m: embedders.setdefault(m, SentenceTransformerEmbedder(m)),
             split=args.split,
-            llm=ClaudeAnswerLLM(s["answer_model"]) if args.answer else None,
+            llm=_answer_llm(s) if args.answer else None,
             unlock_test_split=args.unlock_test_split,
         )
         table = format_results(rows)

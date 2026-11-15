@@ -2,6 +2,8 @@
 
 Every headline number (Recall@5, MRR, faithfulness, Refusal accuracy) must be reproducible by a script and defensible under questioning. Gold labels are therefore attached to Slides rather than Passages, so that changing passage-splitting never invalidates them. The Evaluation Set is split once, with a fixed seed, into a 100-pair Dev Split used for all tuning and a 50-pair Test Split run only for reported results. The Baseline was fixed before any tuning: one Slide per Passage, dense-only search with `BAAI/bge-small-en-v1.5`, top-5, no BM25 and no reranker. Improvements are measured against a configuration chosen in advance, not one picked afterwards.
 
+Faithfulness Verdicts are the one exception to "produced by a script": they are judged in-session and committed as a file, and only their shares and agreement rate are recomputed by script (ADR-0002).
+
 ## Considered Options
 
 - **Passage-level gold labels**: more precise, but every chunking change would need relabelling, and tuning the chunking is one of the measured improvement steps.

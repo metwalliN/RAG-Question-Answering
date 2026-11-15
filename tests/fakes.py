@@ -1,6 +1,6 @@
 """Deterministic stand-ins for the model boundaries (embedder, LLM).
 
-Tests never download models or call the Anthropic API.
+Tests never download models or call an LLM service.
 """
 
 from __future__ import annotations

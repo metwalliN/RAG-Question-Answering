@@ -1,12 +1,14 @@
 """Real implementations of the model boundaries in course_qa.models.
 
 Imported only when the service or ingest runs for real; tests use fakes.
+Answering runs on free infrastructure: Groq's free tier (a Llama model) by default,
+or a local Ollama model as an offline fallback.
 """
 
 from __future__ import annotations
 
-import anthropic
 import numpy as np
+import requests
 from pydantic import ValidationError
 
 from course_qa.models import GeneratedAnswer, MalformedLLMOutput
@@ -21,7 +23,30 @@ Rules:
 e.g. [2]. Cite only Passage numbers you were given.
 - Use only what the Passages say. Do not add outside knowledge, even if you know it.
 - If the Passages do not contain the answer, set "refused" to true and leave "answer" \
-empty. Do not guess."""
+empty. Do not guess.
+
+Reply with a JSON object and nothing else: {"refused": true or false, "answer": "..."}"""
+
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
+
+
+def _answer_messages(question: str, passages: list[str]) -> list[dict[str, str]]:
+    numbered = "\n\n".join(f"Passage [{i}]:\n{text}" for i, text in enumerate(passages, 1))
+    return [
+        {"role": "system", "content": ANSWER_SYSTEM_PROMPT},
+        {"role": "user", "content": f"{numbered}\n\nQuestion: {question}"},
+    ]
+
+
+def _parse_answer(raw: str | None) -> GeneratedAnswer:
+    """Strictly parse the model's JSON. Anything else is malformed, never guessed at."""
+    if not raw:
+        raise MalformedLLMOutput("empty response")
+    try:
+        return GeneratedAnswer.model_validate_json(raw)
+    except ValidationError as exc:
+        raise MalformedLLMOutput(str(exc)) from exc
 
 
 class SentenceTransformerEmbedder:
@@ -35,30 +60,47 @@ class SentenceTransformerEmbedder:
         return vectors.astype(np.float32)
 
 
-class ClaudeAnswerLLM:
-    def __init__(self, model: str = "claude-haiku-5-5", client: anthropic.Anthropic | None = None):
+class GroqAnswerLLM:
+    """Groq's free tier. Reads GROQ_API_KEY from the environment."""
+
+    def __init__(self, model: str = DEFAULT_GROQ_MODEL):
+        from groq import Groq
+
         self._model = model
-        self._client = client or anthropic.Anthropic()
+        self._client = Groq()
 
     def generate_answer(self, question: str, passages: list[str]) -> GeneratedAnswer:
-        numbered = "\n\n".join(f"Passage [{i}]:\n{text}" for i, text in enumerate(passages, 1))
-        try:
-            response = self._client.messages.parse(
-                model=self._model,
-                max_tokens=1024,
-                system=ANSWER_SYSTEM_PROMPT,
-                output_config={"effort": "low"},  # short, grounded answers; keeps latency down
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"{numbered}\n\nQuestion: {question}",
-                    }
-                ],
-                output_format=GeneratedAnswer,
-            )
-        except ValidationError as exc:
-            raise MalformedLLMOutput(str(exc)) from exc
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=_answer_messages(question, passages),
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_completion_tokens=1024,
+        )
+        choice = response.choices[0]
+        if choice.finish_reason != "stop":
+            raise MalformedLLMOutput(f"no usable output (finish_reason={choice.finish_reason})")
+        return _parse_answer(choice.message.content)
 
-        if response.stop_reason != "end_turn" or response.parsed_output is None:
-            raise MalformedLLMOutput(f"no usable output (stop_reason={response.stop_reason})")
-        return response.parsed_output
+
+class OllamaAnswerLLM:
+    """A local model served by Ollama; works offline once the model is pulled."""
+
+    def __init__(self, model: str = DEFAULT_OLLAMA_MODEL, url: str = "http://localhost:11434"):
+        self._model = model
+        self._url = url.rstrip("/")
+
+    def generate_answer(self, question: str, passages: list[str]) -> GeneratedAnswer:
+        response = requests.post(
+            f"{self._url}/api/chat",
+            json={
+                "model": self._model,
+                "messages": _answer_messages(question, passages),
+                "format": GeneratedAnswer.model_json_schema(),
+                "stream": False,
+                "options": {"temperature": 0},
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        return _parse_answer(response.json().get("message", {}).get("content"))

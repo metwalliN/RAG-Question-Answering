@@ -75,7 +75,7 @@ The whole system runs locally with one `docker compose` command.
 
 ### Refusal
 
-33. As a developer, I want the assistant to give a Refusal without calling the LLM when the best rerank score is below a threshold, so that unanswerable questions are fast and cheap.
+33. As a developer, I want the assistant to give a Refusal without calling the LLM when the best rerank score is below a threshold, so that unanswerable questions are fast and don't use up the free tier's rate limit.
 34. As a developer, I want the LLM told to answer only from the supplied Passages, and to signal a Refusal through a structured `refused` field when they don't contain the answer, so that there's a second line of defence against invented answers that never relies on matching phrases in the answer text.
 35. As a developer, I want the Refusal threshold tuned automatically on the Dev Split, so that it's chosen from data, not by hand.
 36. As a developer, I want the threshold tuning to weigh correct Refusals against False Refusals, so that it can't "win" by refusing everything.
@@ -84,9 +84,10 @@ The whole system runs locally with one `docker compose` command.
 
 37. As a developer, I want the Evaluation Set stored as a plain versioned file in the repo, so that anyone can inspect the questions.
 38. As a developer, I want each Evaluation Pair to record a question, a reference answer, one or more Gold Slides, and whether it's an Unanswerable Question, so that every metric can be computed from it.
-39. As a developer, I want a script that drafts candidate questions from sampled Slides with an LLM, so that building 150 pairs is practical.
+39. As a developer, I want a plan of target Slides spread across every Lecture in proportion to its size, with candidate questions drafted for each target by my AI coding assistant in-session, so that building 150 pairs is practical without paying for an API.
+39a. As a developer, I want some drafted questions to need two neighbouring Slides to answer, so that the Evaluation Set tests retrieval across Slide boundaries.
 40. As a developer, I want drafted questions to paraphrase rather than copy Slide wording, so that BM25 isn't rewarded for word overlap real students wouldn't produce.
-41. As a developer, I want to review, edit or reject every drafted question, so that the Evaluation Set is hand-checked.
+41. As a developer, I want to review, edit or reject every drafted question on a page that shows the Gold Slide's text and a rendered image of the Slide, and lets me add extra Gold Slides, so that the Evaluation Set is hand-checked quickly.
 42. As a developer, I want about 30 hand-written hard questions, deliberately worded differently from the Slides, so that the Evaluation Set isn't easy mode. These include questions spanning several Slides and Unanswerable Questions.
 43. As a developer, I want Gold Slides labelled after ingest, against Slides that survived dedupe, so that no label points at a removed Slide.
 44. As a developer, I want an Evaluation Pair to allow several Gold Slides, so that content repeated across Lectures is labelled correctly.
@@ -100,8 +101,8 @@ The whole system runs locally with one `docker compose` command.
 49. As a developer, I want Refusal accuracy and the false Refusal rate reported separately, so that Refusal behaviour is visible.
 50. As a developer, I want one command that runs every Retrieval Configuration in the improvement ladder on a chosen split and writes a results table, so that the before/after story is reproducible.
 51. As a developer, I want the Test Split run only when I explicitly ask for it, so that I don't accidentally tune against it.
-52. As a developer, I want an LLM judge to give each answer a Faithfulness Verdict (Supported, Partially Supported or Unsupported) against its own Citations, so that I can report faithfulness.
-53. As a developer, I want the judge's verdicts on 20 answers exportable for hand-checking, with the agreement rate reported, so that I can say how far the judge can be trusted.
+52. As a developer, I want each answer given a Faithfulness Verdict (Supported, Partially Supported or Unsupported) against its own Citations, judged by my AI coding assistant in-session rather than through an API, so that I can report faithfulness without any paid service.
+53. As a developer, I want 20 of those verdicts exportable for my own hand-checking, with the agreement rate reported, so that I can say how far the judge can be trusted.
 54. As a developer, I want median and 95th-percentile `/ask` latency measured over the Test Split's questions, with the hardware recorded, so that the latency claim is reproducible.
 55. As a portfolio reviewer, I want the README to show the results table and explain how each number was produced, so that I can trust the claims.
 
@@ -110,7 +111,8 @@ The whole system runs locally with one `docker compose` command.
 56. As a developer, I want a `POST /ask` endpoint that takes a question and returns the answer, Citations, a Refusal flag and the timing breakdown, so that the UI and the latency measurement use the same contract.
 57. As a developer, I want a `GET /health` endpoint, so that Docker and the UI can tell when the service is ready.
 58. As a developer, I want `docker compose up` to start the API and the UI, so that the whole system runs with one command.
-59. As a developer, I want the Anthropic API key and every other setting read from environment variables, with an example env file, so that no secrets are committed.
+59. As a developer, I want the Groq API key (`GROQ_API_KEY` in `.env`) and every other setting read from environment variables, with an example env file, so that no secrets are committed.
+59a. As a developer, I want to switch answering to a local Ollama model with one setting, so that the system works offline and without any account.
 60. As a developer, I want the API to fail fast at startup with a clear message if the index is missing, so that I don't get confusing errors on the first question.
 
 ## Implementation Decisions
@@ -133,13 +135,15 @@ The whole system runs locally with one `docker compose` command.
 - LangChain supplies only building blocks: loaders, the FAISS and BM25 retrievers, and fusion. The orchestration is the project's own code.
 
 **Model boundaries**
-- Three small interfaces sit between the project and its models: the embedder, the reranker, and the LLM. The LLM interface is shared by the answer generator and the faithfulness judge.
-- The real implementations are:
-  - `BAAI/bge-small-en-v1.5` for embeddings;
-  - `cross-encoder/ms-marco-MiniLM-L-6-v2` for reranking;
-  - Claude Haiku 5.5 (`claude-haiku-5-5`) for answers;
-  - Claude Sonnet 5.5 (`claude-sonnet-5-5`) for the faithfulness judge.
-- Each one can be swapped through config.
+- Three small interfaces sit between the project and its models: the embedder, the reranker, and the answering LLM.
+- The real implementations are, all free to run:
+  - `BAAI/bge-small-en-v1.5` for embeddings, running locally;
+  - `cross-encoder/ms-marco-MiniLM-L-6-v2` for reranking, running locally;
+  - a Llama model on **Groq's free tier** for answers (default `llama-3.3-70b-versatile`), with the key in `.env` as `GROQ_API_KEY`;
+  - a local **Ollama** model (default `llama3.1:8b`) as an optional offline fallback, chosen with `COURSE_QA_LLM_PROVIDER=ollama`.
+- Each one can be swapped through config or environment variables.
+- The project pays for no API. Two jobs that would otherwise need a paid LLM are done instead by the developer's AI coding assistant (Claude Code), in-session: drafting candidate questions for the Evaluation Set, and judging Faithfulness Verdicts. Neither job is part of the running system.
+- Groq's free tier is rate-limited. Clients retry on rate-limit errors, and `--answer` runs over the whole Evaluation Set are paced to stay within the limits.
 
 **Answering**
 - Applies the Refusal threshold to the best rerank score. Below the threshold it returns a Refusal without calling the LLM.
@@ -160,13 +164,13 @@ The whole system runs locally with one `docker compose` command.
 - It talks only to the API.
 
 **Evaluation**
-- **Question drafting:** an LLM drafts paraphrased candidate questions from sampled Slides.
-- **Review:** the developer accepts, edits or rejects each candidate in a review step.
+- **Question drafting:** a planning command picks target Slides across all Lectures in proportion to their size, skipping near-empty Slides; about 20% of targets are two neighbouring Slides whose answer spans both. Claude Code writes a paraphrased question and reference answer for each target in-session, with no API call. A check command flags drafts whose wording overlaps too much with their Slides.
+- **Review:** a Streamlit review page shows one draft at a time: the question, the reference answer, each Gold Slide's text and a rendered image of the Slide, with Accept, Edit and Reject buttons and a way to add extra Gold Slides. Progress is saved, so a review can stop and resume.
 - **Split:** one fixed-seed split into the Dev Split and the Test Split.
 - **Scoring:** a pure scoring function.
 - **Threshold tuning:** a pure threshold-tuning function.
 - **Ladder runner:** runs the configs in order and writes the results table.
-- **Faithfulness judging:** the LLM judge, plus export for hand-checking.
+- **Faithfulness judging:** an export of the answers and their cited Passages, judged by Claude Code in-session into a committed verdicts file; the developer hand-checks 20 of them, and a command reports the agreement rate. The verdict shares are recomputed from the committed file by script, but re-judging needs a new session.
 - **Latency measurement:** median and p95 for `/ask`.
 
 ### API contract
@@ -190,7 +194,7 @@ Each Evaluation Pair has these fields:
 - the reference answer;
 - the Gold Slides, as a list of one or more (Lecture, Slide) pairs, or an empty list for an Unanswerable Question;
 - whether it is an Unanswerable Question;
-- its origin: drafted-and-reviewed, or hand-written;
+- its origin: drafted-and-reviewed, hand-written, or sample (unreviewed smoke-check pairs that are never reported);
 - its split: Dev or Test.
 
 ### Scoring function (pure)
@@ -267,7 +271,7 @@ See ADR-0001 for why gold labels are at Slide level, why Anchor Slides exist, an
   - ties break towards the lower threshold;
   - a Dev Split with no Unanswerable Questions is handled without dividing by zero.
 
-**Opt-in slow test:** marked `slow` and excluded by default. It runs the real bge-small and cross-encoder over the fixture Lectures to catch integration drift. No test calls the real Anthropic API.
+**Opt-in slow test:** marked `slow` and excluded by default. It runs the real bge-small and cross-encoder over the fixture Lectures to catch integration drift. No test calls Groq, Ollama or any other LLM service; the LLM is always a fake.
 
 **Prior art:** none, because the repo is new. These tests become the prior art for future work.
 
@@ -278,7 +282,7 @@ See ADR-0001 for why gold labels are at Slide level, why Anchor Slides exist, an
 - OCR, images, diagrams and equation understanding. Slides with little extractable text are only counted and listed.
 - Streaming answers.
 - Login, user accounts and saved question history.
-- Public hosting. This is a stretch goal after the system works locally, with API-key cost and abuse controls designed then.
+- Public hosting. This is a stretch goal after the system works locally, with rate-limit and abuse controls for the shared free-tier key designed then.
 - Non-English Course Material.
 - Committing or redistributing the Course Material itself.
 
@@ -287,4 +291,5 @@ See ADR-0001 for why gold labels are at Slide level, why Anchor Slides exist, an
 - The CV bullet reports whatever the Test Split run measures. The 62% → 87% and under-2 s figures are targets, not facts, until the scripts produce them.
 - The Evaluation Set is the most labour-intensive part. Plan time for reviewing about 200 drafted questions and hand-writing about 30.
 - The Baseline uses bge-small, so the improvement ladder measures chunking, hybrid retrieval and reranking, not the switch of embedding model.
-- Vocabulary follows GLOSSARY.md. The evaluation rules follow ADR-0001.
+- Vocabulary follows GLOSSARY.md. The evaluation rules follow ADR-0001. The no-paid-API constraint and its consequences follow ADR-0002.
+- Latency is measured against Groq's free tier, so it includes a network round trip and depends on the free tier's current load. The README states the provider and model measured.

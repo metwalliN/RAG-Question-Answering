@@ -40,7 +40,7 @@ def run_ladder(
     llm: AnswerLLM | None = None,
     unlock_test_split: bool = False,
 ) -> list[LadderRow]:
-    """Score each configuration. Without ``llm``, only retrieval is measured (no API cost)."""
+    """Score each configuration. Without ``llm``, only retrieval is measured (no LLM calls)."""
     if split == "test" and not unlock_test_split:
         raise TestSplitLocked(
             "The Test Split is held out for reported results. "
