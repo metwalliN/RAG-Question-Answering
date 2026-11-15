@@ -1,13 +1,15 @@
 # Evaluation methodology: Slide-level gold labels, fixed dev/test split, pre-registered Baseline
 
-Every headline number (Recall@5, MRR, faithfulness, Refusal accuracy) must be reproducible by a script and defensible under questioning. Gold labels are therefore attached to Slides rather than Passages, so that changing passage-splitting never invalidates them. The Evaluation Set is split once, with a fixed seed, into a 100-pair Dev Split used for all tuning and a 50-pair Test Split run only for reported results. The Baseline was fixed before any tuning: one Slide per Passage, dense-only search with `BAAI/bge-small-en-v1.5`, top-5, no BM25 and no reranker. Improvements are measured against a configuration chosen in advance, not one picked afterwards.
+Every headline number (Recall@5, MRR, faithfulness, Refusal accuracy) must be reproducible by a script and defensible under questioning. Gold labels are therefore attached to Slides rather than Passages, so that changing passage-splitting never invalidates them. The Evaluation Set is split once, with a fixed seed, into a Dev Split (two-thirds of the pairs) used for all tuning and a Test Split (one third) run only for reported results, stratified so both contain Unanswerable Questions. The Baseline was fixed before any tuning: one Slide per Passage, dense-only search with `BAAI/bge-small-en-v1.5`, top-5, no BM25 and no reranker. Improvements are measured against a configuration chosen in advance, not one picked afterwards.
 
 Faithfulness Verdicts are the one exception to "produced by a script": they are judged in-session and committed as a file, and only their shares and agreement rate are recomputed by script (ADR-0002).
+
+Provenance (2026-11-15): candidate pairs, including the Unanswerable Questions, were drafted in-session by Claude Code (ADR-0002) and given a strict second pass against the full extracted Slide text, also by Claude Code; the developer reviewed every draft that pass flagged, plus the first few drafts. Each pair's review decision records who made it. The README must describe the Evaluation Set this way, not as fully hand-checked.
 
 ## Considered Options
 
 - **Passage-level gold labels**: more precise, but every chunking change would need relabelling, and tuning the chunking is one of the measured improvement steps.
-- **Tuning and reporting on all 150 pairs**: simpler, but it inflates the reported scores through overfitting to the evaluation questions.
+- **Tuning and reporting on all pairs**: simpler, but it inflates the reported scores through overfitting to the evaluation questions.
 - **Counting a hit whenever any Slide covered by a multi-Slide Passage is gold**: rejected, because wider windows would raise Recall@5 just by covering more Slides per result, not by retrieving better.
 
 ## Consequences

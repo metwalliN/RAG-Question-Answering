@@ -89,6 +89,29 @@ def main() -> None:
                                "(slower; subject to Groq free-tier rate limits)")
     ladder_p.add_argument("--out", default="results.md")
 
+    plan_p = sub.add_parser("plan-drafts", help="Pick target Slides for Evaluation Set drafts")
+    plan_p.add_argument("--index", default=s["index"])
+    plan_p.add_argument("--count", type=int, default=200)
+    plan_p.add_argument("--span-share", type=float, default=0.2)
+    plan_p.add_argument("--seed", type=int, default=2026)
+    plan_p.add_argument("--out", default="data/drafts/plan.jsonl",
+                        help="Holds Slide text, so it stays in the git-ignored data folder")
+
+    check_p = sub.add_parser("check-drafts", help="Flag drafts that copy Slide wording")
+    check_p.add_argument("--drafts", default="eval/drafts.jsonl")
+    check_p.add_argument("--index", default=s["index"])
+
+    split_p = sub.add_parser("split", help="Make the fixed-seed Dev/Test Split from reviewed pairs")
+    split_p.add_argument("--drafts", default="eval/drafts.jsonl")
+    split_p.add_argument("--reviewed", default="eval/reviewed.jsonl")
+    split_p.add_argument("--index", default=s["index"])
+    split_p.add_argument("--seed", type=int, default=2026)
+    split_p.add_argument("--out", default="eval/evaluation_set.jsonl")
+
+    validate_p = sub.add_parser("validate", help="Check the whole Evaluation Set file")
+    validate_p.add_argument("--eval-set", default="eval/evaluation_set.jsonl")
+    validate_p.add_argument("--index", default=s["index"])
+
     serve_p = sub.add_parser("serve", help="Run the HTTP API")
     serve_p.add_argument("--host", default="127.0.0.1")
     serve_p.add_argument("--port", type=int, default=8000)
@@ -113,6 +136,60 @@ def main() -> None:
         print(f"Near-empty Slides:        {len(report.near_empty)}")
         for lecture, slide in report.near_empty:
             print(f"  {lecture} — Slide {slide}")
+    elif args.command == "plan-drafts":
+        import json
+        from collections import Counter
+        from dataclasses import asdict
+
+        from course_qa.drafting import plan_drafts
+
+        plan = plan_drafts(Path(args.index), args.count, args.span_share, args.seed)
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("\n".join(json.dumps(asdict(t), ensure_ascii=False) for t in plan) + "\n",
+                       encoding="utf-8")
+        print(f"{len(plan)} targets ({sum(t.kind == 'span' for t in plan)} span two Slides) -> {out}")
+        for lecture, n in Counter(t.slides[0].lecture for t in plan).items():
+            print(f"  {n:3}  {lecture}")
+    elif args.command == "check-drafts":
+        from course_qa.drafting import check_drafts
+
+        checks = check_drafts(Path(args.drafts), Path(args.index))
+        bad = [c for c in checks if c.copies_wording or c.unknown_gold_slides]
+        for c in bad:
+            reasons = []
+            if c.copies_wording:
+                reasons.append(f"copies {c.longest_shared_run} consecutive words from its Slide")
+            if c.unknown_gold_slides:
+                reasons.append(f"unknown Gold Slides {c.unknown_gold_slides}")
+            print(f"{c.draft_id}: {'; '.join(reasons)}")
+        print(f"{len(checks)} drafts checked, {len(bad)} flagged")
+        raise SystemExit(1 if bad else 0)
+    elif args.command == "split":
+        from course_qa.evaluation_set import assign_splits
+        from course_qa.review import ReviewSession
+
+        review = ReviewSession(Path(args.drafts), Path(args.index), Path(args.reviewed))
+        done, total = review.progress()
+        kept = review.kept_pairs()
+        if done < total:
+            raise SystemExit(f"{total - done} drafts are still undecided; finish the review first.")
+        pairs = assign_splits(kept, seed=args.seed)
+        Path(args.out).write_text("\n".join(p.model_dump_json() for p in pairs) + "\n", encoding="utf-8")
+        print(f"{sum(p.split == 'dev' for p in pairs)} dev / {sum(p.split == 'test' for p in pairs)} test "
+              f"-> {args.out}")
+    elif args.command == "validate":
+        import json
+
+        from course_qa.evaluation_set import validate_evaluation_set
+        from course_qa.ingest import SLIDES_FILE
+
+        slides = json.loads((Path(args.index) / SLIDES_FILE).read_text(encoding="utf-8"))
+        problems = validate_evaluation_set(Path(args.eval_set), {(s["lecture"], s["slide"]) for s in slides})
+        for p in problems:
+            print(f"- {p}")
+        print("Evaluation Set is valid." if not problems else f"{len(problems)} problems found.")
+        raise SystemExit(1 if problems else 0)
     elif args.command == "ladder":
         from course_qa.adapters import SentenceTransformerEmbedder
         from course_qa.ladder import format_results, run_ladder

@@ -17,6 +17,6 @@ They then publish the results in the README. Each number in the README states ho
 - [ ] Latency (median and p95) is measured over the Test Split's questions on the Docker setup, with the hardware recorded
 - [ ] The README includes the results table, the judge agreement rate, the latency figures, the hardware, and the LLM provider and model (Groq free tier or Ollama)
 - [ ] The README states that the project uses no paid API (ADR-0002), and that Faithfulness Verdicts were judged in-session by Claude Code and committed as a file, so they are recomputed by script but not re-judged by it
-- [ ] The README explains the method: Slide-level Gold Slides, Anchor Slide collapsing, the fixed 100/50 split, the pre-registered Baseline and the paraphrase rule for questions (linking ADR-0001)
+- [ ] The README explains the method: Slide-level Gold Slides, Anchor Slide collapsing, the fixed two-thirds/one-third split, the pre-registered Baseline and the paraphrase rule for questions (linking ADR-0001), and how the Evaluation Set was drafted and reviewed (ADR-0001 provenance)
 - [ ] The README states the Evaluation Set's size and make-up: drafted-and-reviewed versus hand-written, and how many Unanswerable Questions
 - [ ] The CV bullet's numbers match the README exactly

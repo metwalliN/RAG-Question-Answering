@@ -33,7 +33,7 @@ A reference attached to an answer that points to the Lecture and Slide a claim c
 _Avoid_: Source, reference, link
 
 **Evaluation Set**:
-A fixed, hand-checked collection of Evaluation Pairs used to measure how well the assistant retrieves and answers.
+A fixed, reviewed collection of Evaluation Pairs used to measure how well the assistant retrieves and answers.
 _Avoid_: Test set, benchmark, golden set
 
 **Evaluation Pair**:

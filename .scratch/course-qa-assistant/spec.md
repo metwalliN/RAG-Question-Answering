@@ -17,7 +17,7 @@ A question-answering assistant over the course's Course Material:
 
 Behind it is a measured retrieval pipeline. It combines keyword (BM25) and dense search, then reranks with a cross-encoder.
 
-An evaluation harness scores each Retrieval Configuration on a 150-pair Evaluation Set, split into a Dev Split for tuning and a held-out Test Split for reported results:
+An evaluation harness scores each Retrieval Configuration on an Evaluation Set of about 227 pairs (197 answerable, 30 Unanswerable), split into a Dev Split for tuning and a held-out Test Split for reported results:
 - **Configurations scored:** the Baseline, then tuned chunking, then hybrid retrieval, then reranking.
 - **Reported:** Recall@5, MRR, Refusal accuracy, false Refusal rate, Faithfulness Verdicts and latency.
 
@@ -87,11 +87,11 @@ The whole system runs locally with one `docker compose` command.
 39. As a developer, I want a plan of target Slides spread across every Lecture in proportion to its size, with candidate questions drafted for each target by my AI coding assistant in-session, so that building 150 pairs is practical without paying for an API.
 39a. As a developer, I want some drafted questions to need two neighbouring Slides to answer, so that the Evaluation Set tests retrieval across Slide boundaries.
 40. As a developer, I want drafted questions to paraphrase rather than copy Slide wording, so that BM25 isn't rewarded for word overlap real students wouldn't produce.
-41. As a developer, I want to review, edit or reject every drafted question on a page that shows the Gold Slide's text and a rendered image of the Slide, and lets me add extra Gold Slides, so that the Evaluation Set is hand-checked quickly.
-42. As a developer, I want about 30 hand-written hard questions, deliberately worded differently from the Slides, so that the Evaluation Set isn't easy mode. These include questions spanning several Slides and Unanswerable Questions.
+41. As a developer, I want to review, edit or reject every drafted question on a page that shows the Gold Slide's text and a rendered image of the Slide, and lets me add extra Gold Slides, so that I can review it quickly.
+42. As a developer, I want about 30 Unanswerable Questions, mostly near misses on topics the decks name but never explain, each checked against the whole Course Material, so that Refusal behaviour can be measured. I may also add hand-written hard questions through the review page.
 43. As a developer, I want Gold Slides labelled after ingest, against Slides that survived dedupe, so that no label points at a removed Slide.
 44. As a developer, I want an Evaluation Pair to allow several Gold Slides, so that content repeated across Lectures is labelled correctly.
-45. As a developer, I want the Evaluation Set split once into a 100-pair Dev Split and a 50-pair Test Split with a fixed seed, so that the split never changes between runs.
+45. As a developer, I want the Evaluation Set split once, with a fixed seed, two-thirds into the Dev Split and one third into the Test Split, so that the split never changes between runs.
 46. As a developer, I want Unanswerable Questions spread across both splits, so that Refusal behaviour is both tunable and reportable.
 
 ### Scoring and reporting
@@ -289,7 +289,7 @@ See ADR-0001 for why gold labels are at Slide level, why Anchor Slides exist, an
 ## Further Notes
 
 - The CV bullet reports whatever the Test Split run measures. The 62% → 87% and under-2 s figures are targets, not facts, until the scripts produce them.
-- The Evaluation Set is the most labour-intensive part. Plan time for reviewing about 200 drafted questions and hand-writing about 30.
+- The Evaluation Set is the most labour-intensive part. Drafting and a strict second pass were done in-session by Claude Code; the developer reviews the flagged drafts and the Unanswerable Questions.
 - The Baseline uses bge-small, so the improvement ladder measures chunking, hybrid retrieval and reranking, not the switch of embedding model.
 - Vocabulary follows GLOSSARY.md. The evaluation rules follow ADR-0001. The no-paid-API constraint and its consequences follow ADR-0002.
 - Latency is measured against Groq's free tier, so it includes a network round trip and depends on the free tier's current load. The README states the provider and model measured.
