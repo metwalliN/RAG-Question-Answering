@@ -17,7 +17,7 @@ BASELINE = RetrievalConfig(name="baseline", top_k=5)
 def build_client(lectures_dir, index_dir, llm, config=BASELINE):
     embedder = FakeEmbedder()
     ingest(lectures_dir, index_dir, config, embedder)
-    return TestClient(create_app(index_dir, config, embedder, llm))
+    return TestClient(create_app(index_dir, config, embedder, llm, lectures_dir=lectures_dir))
 
 
 def test_answer_cites_the_lecture_and_slide_it_came_from(lectures_dir, index_dir):
@@ -144,3 +144,71 @@ def test_lectures_in_course_subfolders_are_ingested(lectures_dir, index_dir):
         ("Lecture 4 Vision", 1),
         ("L1 Introduction", 1),
     }
+
+
+def test_citation_markers_are_renumbered_in_order_of_first_appearance(lectures_dir, index_dir):
+    two_lecture_course(lectures_dir)
+    llm = ScriptedLLM(answer="Cones see colour [3]. Rods differ [1]. Cones again [3].")
+    client = build_client(lectures_dir, index_dir, llm)
+
+    body = client.post("/ask", json={"question": "What do cones detect?"}).json()
+
+    assert body["answer"] == "Cones see colour [1]. Rods differ [2]. Cones again [1]."
+    ranked = [(r["lecture"], r["slide"]) for r in body["retrieval"]]
+    assert [(c["marker"], c["lecture"], c["slide"]) for c in body["citations"]] == [
+        (1, *ranked[2]),  # the answer's first marker was retrieval rank 3
+        (2, *ranked[0]),
+    ]
+
+
+def test_citation_passages_join_lines_wrapped_only_by_the_pdf_layout(lectures_dir, index_dir):
+    make_lecture(
+        lectures_dir / "L01 Introduction to ML.pdf",
+        [(
+            "Soft Computing",
+            "Hard computing is like solving a mathematical\n"
+            "equation with a definite solution.\n"
+            "• Or like writing conditional\n"
+            "statements for every case\n"
+            "• Left-\n"
+            "Power is averaged per band",
+        )],
+    )
+    client = build_client(lectures_dir, index_dir, ScriptedLLM(answer="Hard computing [1]."))
+
+    body = client.post("/ask", json={"question": "What is hard computing?"}).json()
+
+    lines = body["citations"][0]["passage"].splitlines()
+    assert "Hard computing is like solving a mathematical equation with a definite solution." in lines
+    # (the fixture font draws "•" as "·"; either way each bullet keeps its own line)
+    assert any(line.endswith(" Or like writing conditional statements for every case") for line in lines)
+    assert any(line.endswith(" Left-Power is averaged per band") for line in lines)
+    assert "statements for every case" in body["retrieval"][0]["passage"].splitlines()  # raw kept
+
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def test_a_cited_slide_can_be_fetched_as_a_rendered_image(lectures_dir, index_dir):
+    two_lecture_course(lectures_dir)
+    client = build_client(lectures_dir, index_dir, ScriptedLLM(answer="Cones [1]."))
+    cited = client.post("/ask", json={"question": "What do cones detect?"}).json()["citations"][0]
+
+    image = client.get("/slides/image", params={"lecture": cited["lecture"], "slide": cited["slide"]})
+
+    assert image.status_code == 200
+    assert image.headers["content-type"] == "image/png"
+    assert image.content.startswith(PNG_SIGNATURE)
+
+
+def test_only_indexed_slides_can_be_fetched_as_images(lectures_dir, index_dir):
+    make_lecture(
+        lectures_dir / "L03 GOMS.pdf",
+        [("Fitts Law", "Movement time"), ("Fitts Law", "Movement time\ndepends on distance")],
+    )
+    client = build_client(lectures_dir, index_dir, ScriptedLLM())
+
+    removed_build_step = client.get("/slides/image", params={"lecture": "L03 GOMS", "slide": 1})
+    unknown_lecture = client.get("/slides/image", params={"lecture": "L99 Nothing", "slide": 1})
+
+    assert (removed_build_step.status_code, unknown_lecture.status_code) == (404, 404)

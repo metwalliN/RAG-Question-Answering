@@ -1,17 +1,18 @@
-"""HTTP API: POST /ask and GET /health."""
+"""HTTP API: POST /ask, GET /slides/image and GET /health."""
 
 from __future__ import annotations
 
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
 from course_qa.answering import Citation, answer_question
 from course_qa.config import RetrievalConfig
 from course_qa.models import AnswerLLM, Embedder, MalformedLLMOutput
 from course_qa.retrieval import Retriever
+from course_qa.slide_images import SlideImages, UnknownSlide
 
 
 class AskRequest(BaseModel):
@@ -45,14 +46,30 @@ def _ms_since(start: float) -> float:
 
 
 def create_app(
-    index_dir: Path, config: RetrievalConfig, embedder: Embedder, llm: AnswerLLM
+    index_dir: Path,
+    config: RetrievalConfig,
+    embedder: Embedder,
+    llm: AnswerLLM,
+    *,
+    lectures_dir: Path | None = None,
 ) -> FastAPI:
+    """``lectures_dir`` (the Lecture PDFs) is needed only to serve Slide images."""
     retriever = Retriever(index_dir, config, embedder)
+    images = SlideImages(index_dir, lectures_dir) if lectures_dir is not None else None
     app = FastAPI(title="Course Q&A Assistant")
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/slides/image", response_class=Response)
+    def slide_image(lecture: str, slide: int) -> Response:
+        if images is None:
+            raise HTTPException(status_code=404, detail="Slide images are not available")
+        try:
+            return Response(images.render_png(lecture, slide), media_type="image/png")
+        except UnknownSlide as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
     @app.post("/ask")
     def ask(request: AskRequest) -> AskResponse:

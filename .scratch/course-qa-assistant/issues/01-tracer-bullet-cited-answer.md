@@ -11,7 +11,7 @@
 - [x] Ingest writes the FAISS index and Slide metadata to the data directory, and the API loads them once at startup
 - [x] The Baseline is a named Retrieval Configuration file; the model, top-k and passage-building settings come from config, not code
 - [x] Embedder interface, with the real bge-small and a deterministic fake
-- [x] LLM interface returning structured output `{refused: bool, answer: string}`, with a real implementation and a scripted fake. Originally Claude Haiku 5.5; replaced on 2026-11-14 by Groq's free tier (Llama), with Ollama as an offline fallback, under ADR-0002
+- [x] LLM interface returning structured output `{refused: bool, answer: string}`, with a real implementation and a scripted fake. Originally Claude Haiku 5.5; replaced on 2026-11-14 by Groq's free tier (now openai/gpt-oss-120b, falling back to openai/gpt-oss-20b), with Ollama as an offline fallback, under ADR-0002
 - [x] The prompt tells the LLM to answer only from the numbered Passages, cite with `[n]`, and set `refused` when the Passages don't contain the answer
 - [x] `refused: true` produces a Refusal with empty Citations and the standard Refusal text. The answer text is never phrase-matched. Malformed structured output produces an error
 - [x] Markers that point at no supplied Passage are removed and logged
@@ -24,3 +24,5 @@
 ## Comments
 
 **2026-11-14:** Built test-first. 8 Seam 1 tests pass with the fakes; the opt-in slow test passes with the real bge-small embedder. A real ingest of the Course Material read 542 Slides from 6 Lectures. **Not yet verified live:** a real LLM answer and the Streamlit page in a browser. (Answering now runs on Groq's free tier; see ADR-0002. It needs `GROQ_API_KEY` in `.env`, or `COURSE_QA_LLM_PROVIDER=ollama` with Ollama running.) Follow-ups noticed: symbol-font bullets extract as `�` (cosmetic, worth cleaning in ticket 02); page numbers and deck footers sit inside Slide text; bge-small's query instruction prefix isn't used yet (a candidate setting for ticket 05).
+
+**2026-11-15:** Verified live through `course-qa serve` on Groq's free tier (`openai/gpt-oss-120b`, low reasoning effort; no fallback was triggered). "Which wavelengths of light can the human eye see?" returned a cited answer ([1] L04 Vision — Slide 6) in 823 ms total (retrieve 24, generate 798). "What does Fitts' Law predict?" returned a correct Refusal in 1,004 ms: the decks only mention Fitts' Law in topic lists (L04 Vision Slide 3, L03 Slide 107), and the Motor Skills lecture that covers it isn't in the Course Material. The Streamlit page has still not been opened in a browser.

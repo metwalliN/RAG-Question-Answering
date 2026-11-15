@@ -10,6 +10,18 @@ import streamlit as st
 
 API_URL = os.environ.get("COURSE_QA_API_URL", "http://127.0.0.1:8000")
 
+@st.cache_data(show_spinner=False)
+def slide_image(lecture: str, slide: int) -> bytes | None:
+    """The rendered Slide, fetched through the API; None if it can't be shown."""
+    try:
+        response = requests.get(
+            f"{API_URL}/slides/image", params={"lecture": lecture, "slide": slide}, timeout=30
+        )
+    except requests.RequestException:
+        return None
+    return response.content if response.ok else None
+
+
 st.set_page_config(page_title="Course Q&A Assistant", page_icon="📚")
 st.title("Course Q&A Assistant")
 st.caption("Answers come only from the course's lecture slides, with a Citation for every claim.")
@@ -42,3 +54,6 @@ if st.button("Ask", type="primary", disabled=not question.strip()):
         for marker, c in sorted(by_marker.items()):
             with st.expander(f"[{marker}] {c['lecture']} — Slide {c['slide']}"):
                 st.text(c["passage"])
+                image = slide_image(c["lecture"], c["slide"])
+                if image:
+                    st.image(image, caption=f"{c['lecture']} — Slide {c['slide']}")

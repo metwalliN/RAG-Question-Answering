@@ -1,11 +1,13 @@
 """Real implementations of the model boundaries in course_qa.models.
 
 Imported only when the service or ingest runs for real; tests use fakes.
-Answering runs on free infrastructure: Groq's free tier (a Llama model) by default,
+Answering runs on free infrastructure: Groq's free tier (gpt-oss) by default,
 or a local Ollama model as an offline fallback.
 """
 
 from __future__ import annotations
+
+import logging
 
 import numpy as np
 import requests
@@ -27,8 +29,12 @@ empty. Do not guess.
 
 Reply with a JSON object and nothing else: {"refused": true or false, "answer": "..."}"""
 
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+DEFAULT_GROQ_FALLBACK_MODEL = "openai/gpt-oss-20b"
+DEFAULT_REASONING_EFFORT = "low"  # short, grounded answers; keeps latency down
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
+
+log = logging.getLogger(__name__)
 
 
 def _answer_messages(question: str, passages: list[str]) -> list[dict[str, str]]:
@@ -61,25 +67,52 @@ class SentenceTransformerEmbedder:
 
 
 class GroqAnswerLLM:
-    """Groq's free tier. Reads GROQ_API_KEY from the environment."""
+    """Groq's free tier. Reads GROQ_API_KEY from the environment.
 
-    def __init__(self, model: str = DEFAULT_GROQ_MODEL):
+    If the primary model fails (an API error, a rate limit, or malformed output), the same
+    request is retried once on the fallback model.
+    """
+
+    def __init__(
+        self,
+        model: str = DEFAULT_GROQ_MODEL,
+        fallback_model: str | None = DEFAULT_GROQ_FALLBACK_MODEL,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    ):
         from groq import Groq
 
-        self._model = model
-        self._client = Groq()
+        self._models = [model] + ([fallback_model] if fallback_model and fallback_model != model else [])
+        self._reasoning_effort = reasoning_effort
+        self._client = Groq(max_retries=1)  # fail over to the fallback model quickly
 
     def generate_answer(self, question: str, passages: list[str]) -> GeneratedAnswer:
+        import groq
+
+        messages = _answer_messages(question, passages)
+        for attempt, model in enumerate(self._models):
+            try:
+                return self._ask(model, messages)
+            except (groq.APIStatusError, groq.APIConnectionError, MalformedLLMOutput) as exc:
+                if attempt == len(self._models) - 1:
+                    raise MalformedLLMOutput(f"{model} failed: {type(exc).__name__}") from exc
+                log.warning("%s failed (%s); falling back to %s",
+                            model, type(exc).__name__, self._models[attempt + 1])
+        raise AssertionError("unreachable")
+
+    def _ask(self, model: str, messages: list[dict[str, str]]) -> GeneratedAnswer:
         response = self._client.chat.completions.create(
-            model=self._model,
-            messages=_answer_messages(question, passages),
+            model=model,
+            messages=messages,
             response_format={"type": "json_object"},
+            reasoning_effort=self._reasoning_effort,
+            include_reasoning=False,
             temperature=0,
-            max_completion_tokens=1024,
+            max_completion_tokens=2048,
         )
         choice = response.choices[0]
         if choice.finish_reason != "stop":
             raise MalformedLLMOutput(f"no usable output (finish_reason={choice.finish_reason})")
+        log.info("answered by %s", model)
         return _parse_answer(choice.message.content)
 
 

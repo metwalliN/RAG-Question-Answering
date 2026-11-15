@@ -19,7 +19,7 @@ The tooling and the drafts are this ticket. The developer's review and hand-writ
 - **B: the review session's operations** (accept, edit, reject, add a Gold Slide, resume) and what they write. The Streamlit page is a thin view over it and is checked by running it.
 - **C: split and validate**, as pure functions.
 
-- [ ] Ingest saves Slide-level data (Lecture, Slide, title, text, near-empty flag, source PDF) for planning and review
+- [x] Ingest saves Slide-level data (Lecture, Slide, title, text, near-empty flag, source PDF) for planning and review
 - [ ] The plan spreads targets across Lectures in proportion to their eligible Slides, never targets a near-empty Slide, uses each Slide at most once, and is the same for the same seed
 - [ ] About 20% of targets (configurable) are two neighbouring Slides of the same Lecture, and both become Gold Slides
 - [ ] About 200 drafts are written by Claude Code in-session, paraphrased away from the Slide wording

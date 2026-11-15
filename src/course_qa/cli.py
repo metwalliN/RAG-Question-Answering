@@ -22,6 +22,8 @@ def _settings() -> dict[str, str]:
         "config": os.environ.get("COURSE_QA_CONFIG", "eval/configs/baseline.yaml"),
         "llm_provider": os.environ.get("COURSE_QA_LLM_PROVIDER", "groq"),
         "answer_model": os.environ.get("COURSE_QA_ANSWER_MODEL", ""),
+        "fallback_model": os.environ.get("COURSE_QA_FALLBACK_MODEL", ""),
+        "reasoning_effort": os.environ.get("COURSE_QA_REASONING_EFFORT", ""),
         "ollama_url": os.environ.get("COURSE_QA_OLLAMA_URL", "http://localhost:11434"),
     }
 
@@ -29,8 +31,10 @@ def _settings() -> dict[str, str]:
 def _answer_llm(s: dict[str, str]):
     """Groq's free tier by default; a local Ollama model when offline."""
     from course_qa.adapters import (
+        DEFAULT_GROQ_FALLBACK_MODEL,
         DEFAULT_GROQ_MODEL,
         DEFAULT_OLLAMA_MODEL,
+        DEFAULT_REASONING_EFFORT,
         GroqAnswerLLM,
         OllamaAnswerLLM,
     )
@@ -38,7 +42,11 @@ def _answer_llm(s: dict[str, str]):
     if s["llm_provider"] == "ollama":
         return OllamaAnswerLLM(s["answer_model"] or DEFAULT_OLLAMA_MODEL, s["ollama_url"])
     if s["llm_provider"] == "groq":
-        return GroqAnswerLLM(s["answer_model"] or DEFAULT_GROQ_MODEL)
+        return GroqAnswerLLM(
+            s["answer_model"] or DEFAULT_GROQ_MODEL,
+            s["fallback_model"] or DEFAULT_GROQ_FALLBACK_MODEL,
+            s["reasoning_effort"] or DEFAULT_REASONING_EFFORT,
+        )
     raise SystemExit(f"COURSE_QA_LLM_PROVIDER must be 'groq' or 'ollama', not {s['llm_provider']!r}")
 
 
@@ -54,6 +62,7 @@ def create_service_app():
         config,
         SentenceTransformerEmbedder(config.embedding_model),
         _answer_llm(s),
+        lectures_dir=Path(s["lectures"]),
     )
 
 

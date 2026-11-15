@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import pymupdf
 from fastapi.testclient import TestClient
 
-from conftest import BROKEN_BULLET, make_lecture
+from conftest import BROKEN_BULLET, MATH_HAT, MATH_Y, make_lecture
 from course_qa.api import create_app
 from course_qa.config import RetrievalConfig
 from course_qa.ingest import ingest
@@ -176,3 +177,64 @@ def test_bullet_only_lines_are_stripped_and_not_reported_as_footers(lectures_dir
 
     assert report.footers_removed == {}
     assert all("•" not in r["passage"].splitlines() for r in body["retrieval"])
+
+
+def test_letter_o_sub_bullet_markers_are_stripped(lectures_dir, index_dir):
+    make_lecture(
+        lectures_dir / "Lecture 3 GOMS.pdf",
+        [("Which Feedback?", "Time\no Execution time for tasks\no\nSpace")],
+    )
+
+    _, body = ingest_and_ask(lectures_dir, index_dir, "execution time")
+
+    lines = body["retrieval"][0]["passage"].splitlines()
+    assert "Execution time for tasks" in lines
+    assert not any(line == "o" or line.startswith("o ") for line in lines)
+
+
+def test_underscores_in_pdf_file_names_become_spaces_in_lecture_names(lectures_dir, index_dir):
+    make_lecture(lectures_dir / "L04_Vision.pdf", [("Fovea", "Sharpest central vision")])
+
+    _, body = ingest_and_ask(lectures_dir, index_dir, "fovea")
+
+    assert body["retrieval"][0]["lecture"] == "L04 Vision"
+
+
+def test_a_title_wrapped_over_two_lines_is_joined(lectures_dir, index_dir):
+    make_lecture(
+        lectures_dir / "L01 Introduction to ML.pdf",
+        [("Supervised\nLearning", "Learning a mapping from labelled examples")],
+    )
+
+    _, body = ingest_and_ask(lectures_dir, index_dir, "labelled examples")
+
+    assert body["retrieval"][0]["passage"].splitlines()[0] == (
+        "L01 Introduction to ML | Supervised Learning"
+    )
+
+
+def test_math_font_hats_are_stripped_and_math_letters_become_plain(lectures_dir, index_dir):
+    make_lecture(
+        lectures_dir / "L01 Introduction to ML.pdf",
+        [("Linear regression", f"The prediction is\n{MATH_HAT}{MATH_Y}= 2x + 1")],
+    )
+
+    _, body = ingest_and_ask(lectures_dir, index_dir, "linear regression prediction")
+
+    assert "y= 2x + 1" in body["retrieval"][0]["passage"].splitlines()
+
+
+def test_body_text_in_the_title_font_is_not_absorbed_into_the_title(lectures_dir, index_dir):
+    # Some Slides set everything in one size; only the first paragraph is the title.
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 60), "Advantages", fontsize=24)
+    page.insert_text((72, 120), "Inexpensive and quick to run", fontsize=24)  # 2.5 lines below
+    page.insert_text((72, 180), "Challenges include subjective judgement", fontsize=24)
+    (lectures_dir).mkdir(parents=True)
+    doc.save(lectures_dir / "L03 GOMS.pdf")
+
+    report, body = ingest_and_ask(lectures_dir, index_dir, "advantages")
+
+    assert body["retrieval"][0]["passage"].splitlines()[0] == "L03 GOMS | Advantages"
+    assert report.near_empty == []

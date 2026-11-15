@@ -6,13 +6,19 @@ import pymupdf
 import pytest
 
 BROKEN_BULLET = ""  # a private-use Wingdings bullet, as real decks extract it
+MATH_HAT = "ෝ"  # the Sinhala sign a math font uses as the hat in "ŷ"
+MATH_Y = "\U0001d49a"  # MATHEMATICAL BOLD ITALIC SMALL Y, as equations extract
 
-# A Helvetica font whose ToUnicode map turns byte 0x80 into the private-use
-# bullet, reproducing how symbol-font bullets come out of real slide decks.
-_BROKEN_CMAP = b"""/CIDInit /ProcSet findresource begin 12 dict begin begincmap
-/CMapName /Broken def 1 begincodespacerange <00> <FF> endcodespacerange
-1 beginbfchar <80> <F0A7> endbfchar
-endcmap CMapName currentdict /CMap defineresource pop end end"""
+# Characters drawn through a Helvetica font whose ToUnicode map turns single bytes
+# into them, reproducing how symbol and math fonts come out of real slide decks.
+_SPECIAL_GLYPHS = {BROKEN_BULLET: (0x80, "F0A7"), MATH_HAT: (0x82, "0DDD"), MATH_Y: (0x83, "D835DC9A")}
+_BROKEN_CMAP = (
+    "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n"
+    "/CMapName /Broken def 1 begincodespacerange <00> <FF> endcodespacerange\n"
+    f"{len(_SPECIAL_GLYPHS)} beginbfchar "
+    + " ".join(f"<{code:02X}> <{uni}>" for code, uni in _SPECIAL_GLYPHS.values())
+    + " endbfchar\nendcmap CMapName currentdict /CMap defineresource pop end end"
+).encode("ascii")
 
 
 def make_lecture(
@@ -25,9 +31,10 @@ def make_lecture(
     """Write a Lecture PDF with one page per (title, body) Slide.
 
     Titles are set in a large font and bodies in a small one, as real decks are.
-    Body lines starting with BROKEN_BULLET are drawn with a symbol-font bullet that
-    extracts as a private-use character. ``footer`` and ``page_numbers`` add the
-    small repeated lines real decks carry at the bottom of each Slide.
+    Body lines containing BROKEN_BULLET, MATH_HAT or MATH_Y are drawn so that those
+    characters extract exactly as they do from real symbol and math fonts.
+    ``footer`` and ``page_numbers`` add the small repeated lines real decks carry at
+    the bottom of each Slide.
     """
     doc = pymupdf.open()
     broken_font = None
@@ -36,9 +43,9 @@ def make_lecture(
         page.insert_text((72, 90), title, fontsize=28)
         y = 150
         for line in body.split("\n") if body else []:
-            if line.startswith(BROKEN_BULLET):
+            if any(ch in _SPECIAL_GLYPHS for ch in line):
                 broken_font = broken_font or _add_broken_font(doc)
-                _draw_broken_bullet_line(doc, page, broken_font, line[1:].strip(), y)
+                _draw_special_glyph_line(doc, page, broken_font, line, y)
             else:
                 page.insert_text((72, y), line, fontsize=14)
             y += 24
@@ -63,7 +70,13 @@ def _add_broken_font(doc: pymupdf.Document) -> int:
     return font
 
 
-def _draw_broken_bullet_line(doc, page, font_xref: int, text: str, y: float) -> None:
+def _draw_special_glyph_line(doc, page, font_xref: int, text: str, y: float) -> None:
+    encoded = "".join(
+        f"\\{_SPECIAL_GLYPHS[ch][0]:03o}" if ch in _SPECIAL_GLYPHS
+        else "\\" + ch if ch in "()\\"
+        else ch
+        for ch in text
+    )
     resources = int(doc.xref_get_key(page.xref, "Resources")[1].split()[0])
     fonts = doc.xref_get_key(resources, "Font")[1]
     if "/FBroken" not in fonts:
@@ -72,7 +85,7 @@ def _draw_broken_bullet_line(doc, page, font_xref: int, text: str, y: float) -> 
     stream = doc.get_new_xref()
     doc.update_object(stream, "<< >>")
     doc.update_stream(
-        stream, f"BT /FBroken 14 Tf 72 {pdf_y} Td (\\200 {text}) Tj ET".encode("latin-1")
+        stream, f"BT /FBroken 14 Tf 72 {pdf_y} Td ({encoded}) Tj ET".encode("latin-1")
     )
     contents = doc.xref_get_key(page.xref, "Contents")[1]
     doc.xref_set_key(page.xref, "Contents", contents[:-1] + f" {stream} 0 R]")

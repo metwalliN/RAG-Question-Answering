@@ -139,7 +139,7 @@ The whole system runs locally with one `docker compose` command.
 - The real implementations are, all free to run:
   - `BAAI/bge-small-en-v1.5` for embeddings, running locally;
   - `cross-encoder/ms-marco-MiniLM-L-6-v2` for reranking, running locally;
-  - a Llama model on **Groq's free tier** for answers (default `llama-3.3-70b-versatile`), with the key in `.env` as `GROQ_API_KEY`;
+  - an open-weight model on **Groq's free tier** for answers: `openai/gpt-oss-120b` with low reasoning effort, falling back to `openai/gpt-oss-20b` if the primary model errors, is rate-limited or returns malformed output. The key lives in `.env` as `GROQ_API_KEY`;
   - a local **Ollama** model (default `llama3.1:8b`) as an optional offline fallback, chosen with `COURSE_QA_LLM_PROVIDER=ollama`.
 - Each one can be swapped through config or environment variables.
 - The project pays for no API. Two jobs that would otherwise need a paid LLM are done instead by the developer's AI coding assistant (Claude Code), in-session: drafting candidate questions for the Evaluation Set, and judging Faithfulness Verdicts. Neither job is part of the running system.
